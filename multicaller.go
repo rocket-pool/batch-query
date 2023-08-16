@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"sync"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -22,7 +23,8 @@ const (
 )
 
 // ABI cache
-var multicallAbi *abi.ABI
+var multicallAbi abi.ABI
+var mcOnce sync.Once
 
 // A single contract call wrapper
 type Call struct {
@@ -60,26 +62,27 @@ type MultiCaller struct {
 	// The multicall v2 contract address
 	contractAddress common.Address
 
-	// The multicall v2 contract ABI
-	abi *abi.ABI
-
 	// The collection of calls to batch and execute during the next FlexibleCall()
 	calls []Call
 }
 
 // Creates a new MultiCaller instance with the provided execution client and address of the multicaller contract
 func NewMultiCaller(client IContractCaller, multicallerAddress common.Address) (*MultiCaller, error) {
-	if multicallAbi == nil {
-		abi, err := abi.JSON(strings.NewReader(multicallAbiString))
-		if err != nil {
-			return nil, err
+
+	var err error
+	mcOnce.Do(func() {
+		var parsedAbi abi.ABI
+		parsedAbi, err = abi.JSON(strings.NewReader(multicallAbiString))
+		if err == nil {
+			multicallAbi = parsedAbi
 		}
-		multicallAbi = &abi
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return &MultiCaller{
 		client:          client,
-		abi:             multicallAbi,
 		contractAddress: multicallerAddress,
 		calls:           []Call{},
 	}, nil
@@ -112,16 +115,16 @@ func (mc *MultiCaller) FlexibleCall(requireSuccess bool, opts *bind.CallOpts) ([
 	res := make([]bool, len(mc.calls))
 
 	// Create the CallData for each call
-	for _, call := range mc.calls {
+	for i, call := range mc.calls {
 		callData, err := call.PackFunc()
 		if err != nil {
 			return nil, err
 		}
-		call.CallData = callData
+		mc.calls[i].CallData = callData
 	}
 
 	// Prep the multicall args
-	callData, err := mc.abi.Pack("tryAggregate", requireSuccess, mc.calls)
+	callData, err := multicallAbi.Pack("tryAggregate", requireSuccess, mc.calls)
 	if err != nil {
 		return nil, fmt.Errorf("error packing aggregated call data: %w", err)
 	}
@@ -138,7 +141,7 @@ func (mc *MultiCaller) FlexibleCall(requireSuccess bool, opts *bind.CallOpts) ([
 
 	// Unpack the multicall output
 	results := make([]CallResponse, len(mc.calls))
-	err = mc.abi.UnpackIntoInterface(&results, "tryAggregate", resp)
+	err = multicallAbi.UnpackIntoInterface(&results, "tryAggregate", resp)
 	if err != nil {
 		return nil, fmt.Errorf("error unpacking aggregated response data: %w", err)
 	}

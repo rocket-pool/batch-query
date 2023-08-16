@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"sync"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -19,7 +20,8 @@ const (
 )
 
 // ABI cache
-var balanceBatcherAbi *abi.ABI
+var balanceBatcherAbi abi.ABI
+var bbOnce sync.Once
 
 // This struct can query the ETH balances of multiple addresses within a single call to an Execution Client.
 // It is useful if you need to query the balance of many addresses, because batching them reduces RPC overhead.
@@ -35,25 +37,26 @@ type BalanceBatcher struct {
 
 	// Address of the balance batcher contract
 	contractAddress common.Address
-
-	// ABI for the balance batcher contract
-	abi *abi.ABI
 }
 
 // Creates a new BalanceBatcher instance
 func NewBalanceBatcher(client IContractCaller, address common.Address, balanceBatchSize int, threadLimit int) (*BalanceBatcher, error) {
-	if balanceBatcherAbi == nil {
-		abi, err := abi.JSON(strings.NewReader(balanceBatcherAbiString))
-		if err != nil {
-			return nil, err
+
+	var err error
+	bbOnce.Do(func() {
+		var parsedAbi abi.ABI
+		parsedAbi, err = abi.JSON(strings.NewReader(balanceBatcherAbiString))
+		if err == nil {
+			balanceBatcherAbi = parsedAbi
 		}
-		balanceBatcherAbi = &abi
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return &BalanceBatcher{
 		client:           client,
 		contractAddress:  address,
-		abi:              balanceBatcherAbi,
 		BalanceBatchSize: balanceBatchSize,
 		ThreadLimit:      threadLimit,
 	}, nil
@@ -79,7 +82,7 @@ func (b *BalanceBatcher) GetEthBalances(addresses []common.Address, opts *bind.C
 			tokens := []common.Address{
 				{}, // Empty token for ETH balance
 			}
-			callData, err := b.abi.Pack("balances", subAddresses, tokens)
+			callData, err := balanceBatcherAbi.Pack("balances", subAddresses, tokens)
 			if err != nil {
 				return fmt.Errorf("error creating calldata for balances: %w", err)
 			}
@@ -96,7 +99,7 @@ func (b *BalanceBatcher) GetEthBalances(addresses []common.Address, opts *bind.C
 
 			// Sanity checking and verification
 			var subBalances []*big.Int
-			err = b.abi.UnpackIntoInterface(&subBalances, "balances", response)
+			err = balanceBatcherAbi.UnpackIntoInterface(&subBalances, "balances", response)
 			if err != nil {
 				return fmt.Errorf("error unpacking balances response: %w", err)
 			}
