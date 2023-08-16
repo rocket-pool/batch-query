@@ -26,9 +26,19 @@ var multicallAbi *abi.ABI
 
 // A single contract call wrapper
 type Call struct {
-	Target     common.Address     `json:"target"`
-	Method     string             `json:"-"`
-	CallData   []byte             `json:"callData"`
+	// The contract address of the target to run the call on
+	Target common.Address `json:"target"`
+
+	// Packed call data to be passed to the function as input
+	CallData []byte `json:"callData"`
+
+	// The name of the method being called (for debugging only)
+	Method string `json:"-"`
+
+	// Function to generate the call data
+	PackFunc func() ([]byte, error) `json:"-"`
+
+	// Function to generate the output from the response
 	UnpackFunc func([]byte) error `json:"-"`
 }
 
@@ -76,21 +86,22 @@ func NewMultiCaller(client IContractCaller, multicallerAddress common.Address) (
 }
 
 // Adds a contract call to the batch of calls to query during the next run
-func (mc *MultiCaller) AddCall(contractAddress common.Address, abi *abi.ABI, output any, method string, args ...interface{}) error {
-	callData, err := abi.Pack(method, args...)
-	if err != nil {
-		return fmt.Errorf("error adding call [%s]: %w", method, err)
-	}
+func (mc *MultiCaller) AddCall(contractAddress common.Address, abi *abi.ABI, output any, method string, args ...any) {
 	call := Call{
-		Target:   contractAddress,
-		Method:   method,
-		CallData: callData,
+		Target: contractAddress,
+		Method: method,
+		PackFunc: func() ([]byte, error) {
+			callData, err := abi.Pack(method, args...)
+			if err != nil {
+				return nil, fmt.Errorf("error packing data for call [%s]: %w", method, err)
+			}
+			return callData, nil
+		},
 		UnpackFunc: func(rawData []byte) error {
 			return abi.UnpackIntoInterface(output, method, rawData)
 		},
 	}
 	mc.calls = append(mc.calls, call)
-	return nil
 }
 
 // Invokes all of the previously batched up contract calls in a single call.
@@ -99,6 +110,15 @@ func (mc *MultiCaller) AddCall(contractAddress common.Address, abi *abi.ABI, out
 // Upon completion, the internal list of batched up contract calls will be cleared.
 func (mc *MultiCaller) FlexibleCall(requireSuccess bool, opts *bind.CallOpts) ([]bool, error) {
 	res := make([]bool, len(mc.calls))
+
+	// Create the CallData for each call
+	for _, call := range mc.calls {
+		callData, err := call.PackFunc()
+		if err != nil {
+			return nil, err
+		}
+		call.CallData = callData
+	}
 
 	// Prep the multicall args
 	callData, err := mc.abi.Pack("tryAggregate", requireSuccess, mc.calls)
