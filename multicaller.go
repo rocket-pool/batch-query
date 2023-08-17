@@ -96,7 +96,7 @@ func (mc *MultiCaller) AddCall(contractAddress common.Address, abi *abi.ABI, out
 		PackFunc: func() ([]byte, error) {
 			callData, err := abi.Pack(method, args...)
 			if err != nil {
-				return nil, fmt.Errorf("error packing data for call [%s]: %w", method, err)
+				return nil, fmt.Errorf("error packing data for call [%s] on contract %s: %w", method, contractAddress.Hex(), err)
 			}
 			return callData, nil
 		},
