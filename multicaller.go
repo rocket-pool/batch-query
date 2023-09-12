@@ -112,6 +112,9 @@ func (mc *MultiCaller) AddCall(contractAddress common.Address, abi *abi.ABI, out
 // If false, the calls can run independently and you will be given a list of resulting success or fail flags for each call.
 // Upon completion, the internal list of batched up contract calls will be cleared.
 func (mc *MultiCaller) FlexibleCall(requireSuccess bool, opts *bind.CallOpts) ([]bool, error) {
+	if len(mc.calls) == 0 {
+		return []bool{}, nil
+	}
 	res := make([]bool, len(mc.calls))
 
 	// Create the CallData for each call
